@@ -15,6 +15,11 @@
 #define CACHE_PARAM_BLOCK_SIZE 1
 #define CACHE_PARAM_USIZE 2
 
+#define STATE_INVALID 0; 
+#define STATE_SHARED 1; 
+#define STATE_EXCLUSIVE 3; 
+#define STATE_MODIFIED 4; 
+
 /* structure definitions */
 typedef struct cache_line_ {
   unsigned tag;

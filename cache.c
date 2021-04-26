@@ -7,17 +7,40 @@
 #include "main.h"
 
 /* cache configuration parameters */
-static int cache_usize = DEFAULT_CACHE_SIZE;
-static int cache_block_size = DEFAULT_CACHE_BLOCK_SIZE;
-static int words_per_block = DEFAULT_CACHE_BLOCK_SIZE / WORD_SIZE;
+static int cache_usize = DEFAULT_CACHE_SIZE;                        // input 
+static int cache_block_size = DEFAULT_CACHE_BLOCK_SIZE;             // input 
+static int words_per_block = DEFAULT_CACHE_BLOCK_SIZE / WORD_SIZE;  // calculated
 static int cache_writeback = DEFAULT_CACHE_WRITEBACK;
 static int cache_writealloc = DEFAULT_CACHE_WRITEALLOC;
-static int num_core = DEFAULT_NUM_CORE;
+static int num_core = DEFAULT_NUM_CORE;                             // input 
 
 /* cache model data structures */
 /* max of 8 cores */
 static cache mesi_cache[8];
 static cache_stat mesi_cache_stat[8];
+
+void print_cache_info(int i){ 
+  printf("cache %d info:\n", i);
+  printf("\tid: %d\n", mesi_cache[i].id);
+  printf("\tsize: %d\n", mesi_cache[i].size);
+  //printf("\thead: %u\n", mesi_cache[i].LRU_head);
+  printf("\thead tag: %.8x\n", mesi_cache[i].LRU_head->tag);
+  //printf("\ttail: %u\n", mesi_cache[i].LRU_tail);
+  printf("\ttail tag: %.8x\n", mesi_cache[i].LRU_tail->tag);
+  printf("\tcontent: %d\n", mesi_cache[i].cache_contents);
+}
+
+void print_cache_list(int i){
+  printf("cache %d linked list:\n", i);
+  int j = 0;
+  Pcache_line node = mesi_cache[i].LRU_head;
+  while(node){
+    printf("\tnode %d \ttag: %.8x, state: %d\n", j, node->tag, node->state);
+    node = node-> LRU_next;
+    j++;
+  }
+  
+}
 
 /************************************************************/
 void set_cache_param(param, value)
@@ -50,13 +73,28 @@ void init_cache()
   /* initialize the cache, and cache statistics data structures */
   for(i = 0; i < num_core; i++)
   {
- }
+    printf("initiating cache %d\n", i);
+    mesi_cache[i].id = i; 
+    mesi_cache[i].size = 0;
+    // mesi_cache[i].LRU_head = (Pcache_line )malloc(sizeof(cache_line)); 
+    // mesi_cache[i].LRU_head->LRU_next = (Pcache_line)NULL;
+    // mesi_cache[i].LRU_head->LRU_prev = (Pcache_line)NULL;
+    // mesi_cache[i].LRU_tail = (Pcache_line )malloc(sizeof(cache_line));
+    // mesi_cache[i].LRU_tail->LRU_next = (Pcache_line)NULL;
+    // mesi_cache[i].LRU_tail->LRU_prev = (Pcache_line)NULL;
+    mesi_cache[i].LRU_head = (Pcache_line)NULL; 
+    mesi_cache[i].LRU_tail = (Pcache_line)NULL;
+    mesi_cache[i].cache_contents = 0; 
+    // print_cache_info(i);
+    print_cache_list(i);
+  }
 }
 /************************************************************/
 
 /************************************************************/
 void perform_access(addr, access_type, pid)
      unsigned addr, access_type, pid;
+  
 {
   int i, idx;
   Pcache c;
@@ -111,12 +149,10 @@ void insert(head, tail, item)
 {
   item->LRU_next = *head;
   item->LRU_prev = (Pcache_line)NULL;
-
   if (item->LRU_next)
     item->LRU_next->LRU_prev = item;
   else
     *tail = item;
-
   *head = item;
 }
 /************************************************************/
@@ -175,10 +211,43 @@ void init_stat(Pcache_stat stat)
   stat->broadcasts = 0;
 }
 /************************************************************/
+int is_address_in_list(int i, int addr){
+  Pcache_line node = mesi_cache[i].LRU_head;
+  while(node){
+    if (node->tag == addr){
+      return TRUE;
+    }
+    node = node->LRU_next;
+  }
+  return FALSE;
+}
+
 void perform_access_store(int addr, int i)
 {
+  printf("\naccess store:\n");
+  printf("\taddr: %.8x\n", addr);
+  printf("\ti: %d\n", i);
 }
 
 void perform_access_load(int addr, int i)
 {
+  printf("\naccess load:\n");
+  printf("\taddr: %.8x\n", addr);
+  printf("\tcore: %d\n", i);
+   
+  if (is_address_in_list(i, addr) == FALSE){
+    // address not in cache (read miss)
+
+    // cache don't have space
+
+    // cache have space 
+    Pcache_line new_cache_line = (Pcache_line )malloc(sizeof(cache_line));
+    new_cache_line->tag = addr;
+    new_cache_line->state = STATE_SHARED;
+    insert(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, new_cache_line);
+    mesi_cache[i].cache_contents += 1;
+  }
+  //print_cache_info(i);
+  print_cache_list(i);
+
 }
