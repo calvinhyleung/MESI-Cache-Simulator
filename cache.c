@@ -36,7 +36,7 @@ void print_cache_list(int i){
   Pcache_line node = mesi_cache[i].LRU_head;
   while(node){
     printf("\tnode %d \ttag: %.8x, state: %d\n", j, node->tag, node->state);
-    node = node-> LRU_next;
+    node = node->LRU_next;
     j++;
   }
   
@@ -211,6 +211,30 @@ void init_stat(Pcache_stat stat)
   stat->broadcasts = 0;
 }
 /************************************************************/
+
+/************************************************************/
+void remove_tail(int i) {
+  if (mesi_cache[i].LRU_head == mesi_cache[i].LRU_tail) {
+    mesi_cache[i].LRU_head = (Pcache_line)NULL; 
+    mesi_cache[i].LRU_tail = (Pcache_line)NULL;
+  } else {
+    Pcache_line prev = mesi_cache[i].LRU_tail->LRU_prev;
+    prev->LRU_next = (Pcache_line)NULL;; 
+    mesi_cache[i].LRU_tail = prev;
+  }
+}
+
+Pcache_line get_node(int i, int addr){
+  Pcache_line node = mesi_cache[i].LRU_head;
+  while(node){
+    if (node->tag == addr){
+      return node;
+    }
+    node = node->LRU_next;
+  }
+  return NULL;
+}
+
 int is_address_in_list(int i, int addr){
   Pcache_line node = mesi_cache[i].LRU_head;
   while(node){
@@ -220,6 +244,27 @@ int is_address_in_list(int i, int addr){
     node = node->LRU_next;
   }
   return FALSE;
+}
+
+void bus_transaction(int transaction_type){
+  switch (transaction_type) {
+    case BUS_READ_MISS: 
+    
+    break; 
+    
+    case BUS_READ_HIT: 
+    
+    break; 
+    
+    case BUS_WRITE_MISS: 
+
+    break;
+
+    case BUS_WRITE_HIT: 
+
+    break; 
+
+  }
 }
 
 void perform_access_store(int addr, int i)
@@ -234,20 +279,47 @@ void perform_access_load(int addr, int i)
   printf("\naccess load:\n");
   printf("\taddr: %.8x\n", addr);
   printf("\tcore: %d\n", i);
-   
-  if (is_address_in_list(i, addr) == FALSE){
-    // address not in cache (read miss)
+  Pcache_line node = get_node(i, addr);
+  if (node == NULL){    // if block is not in the cache 
+    if (mesi_cache[i].cache_contents >= cache_usize / cache_block_size){ // if cache is full 
+      // get tail info
+      unsigned tail_tag = mesi_cache[i].LRU_tail->tag;
+      int tail_state = mesi_cache[i].LRU_tail->state;
+      // write back if modified 
+      if (tail_state == STATE_MODIFIED){
+        // write back 
+        // bus write back to main mem 
+      }
+      // remove tail 
+      remove_tail(i);
+    } else { // if cache is not full 
+      // create a new block 
+      Pcache_line new_cache_line = (Pcache_line )malloc(sizeof(cache_line));
+      new_cache_line->tag = addr;
+      new_cache_line->state = STATE_SHARED;
+      // add new block to cache 
+      insert(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, new_cache_line);
+      // increment counter 
+      mesi_cache[i].cache_contents += 1;
+    }
+    
 
-    // cache don't have space
-
-    // cache have space 
+  } else {              // if block is in the cache 
+    // get the information of the old block
+    int tag = node->tag;
+    int state = node->state;  
+    // delete the old block 
+    delete(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, node);
+    // make a copy of the block 
     Pcache_line new_cache_line = (Pcache_line )malloc(sizeof(cache_line));
-    new_cache_line->tag = addr;
-    new_cache_line->state = STATE_SHARED;
+    new_cache_line->tag = tag;
+    new_cache_line->state = state;    // the state is unchanged 
+    // reinsert the block to make the LRU work 
     insert(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, new_cache_line);
-    mesi_cache[i].cache_contents += 1;
-  }
-  //print_cache_info(i);
+    // dont need to increment counter 
+    
+  } 
+  
   print_cache_list(i);
 
 }

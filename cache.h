@@ -15,16 +15,20 @@
 #define CACHE_PARAM_BLOCK_SIZE 1
 #define CACHE_PARAM_USIZE 2
 
-#define STATE_INVALID 0; 
-#define STATE_SHARED 1; 
-#define STATE_EXCLUSIVE 3; 
-#define STATE_MODIFIED 4; 
+#define STATE_INVALID 0
+#define STATE_SHARED 1
+#define STATE_EXCLUSIVE 3
+#define STATE_MODIFIED 4
+
+#define BUS_READ_MISS 0
+#define BUS_READ_HIT 1  
+#define BUS_WRITE_MISS 2 
+#define BUS_WRITE_HIT 3 
 
 /* structure definitions */
 typedef struct cache_line_ {
   unsigned tag;
   int state;
-
   struct cache_line_ *LRU_next;
   struct cache_line_ *LRU_prev;
 } cache_line, *Pcache_line;
