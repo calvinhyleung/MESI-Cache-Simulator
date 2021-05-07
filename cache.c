@@ -30,7 +30,8 @@ void print_cache_info(int i){
   printf("\tcontent: %d\n", mesi_cache[i].cache_contents);
 }
 
-void print_cache_list(int i){
+void print_cache_list(){
+  for (int i = 0; i < num_core; i ++){
   printf("cache %d linked list:\n", i);
   int j = 0;
   Pcache_line node = mesi_cache[i].LRU_head;
@@ -39,7 +40,13 @@ void print_cache_list(int i){
     node = node->LRU_next;
     j++;
   }
-  
+  }
+}
+
+void print_basic(int i, int addr) {
+  printf("\naccess store:\n");
+  printf("\taddr: %.8x\n", addr);
+  printf("\ti: %d\n", i);
 }
 
 /************************************************************/
@@ -87,6 +94,12 @@ void init_cache()
     mesi_cache[i].cache_contents = 0; 
     // print_cache_info(i);
     print_cache_list(i);
+    mesi_cache_stat[i].accesses = 0;
+    mesi_cache_stat[i].misses = 0;
+    mesi_cache_stat[i].replacements = 0;
+    mesi_cache_stat[i].demand_fetches = 0;
+    mesi_cache_stat[i].copies_back = 0;
+    mesi_cache_stat[i].broadcasts = 0;
   }
 }
 /************************************************************/
@@ -116,7 +129,15 @@ void perform_access(addr, access_type, pid)
 /************************************************************/
 void flush()
 {
-  /* flush the mesi caches */
+  for (int i = 0; i < num_core; i ++) {
+    Pcache_line node = mesi_cache[i].LRU_head;
+    while(node){
+      if (node->state == STATE_MODIFIED){
+        mesi_cache_stat[i].copies_back += 1; 
+      }
+      node = node->LRU_next;
+    }
+  }
 }
 /************************************************************/
 
@@ -196,7 +217,7 @@ void print_stats()
   printf("  demand fetch (words): %d\n", (demand_fetches)*cache_block_size/WORD_SIZE);
   /* number of broadcasts */
   printf("  broadcasts:           %d\n", broadcasts);
-  printf("  copies back (words):  %d\n", copies_back);
+  printf("  copies back (words):  %d\n", copies_back*words_per_block);
 }
 /************************************************************/
 
@@ -214,7 +235,7 @@ void init_stat(Pcache_stat stat)
 
 /************************************************************/
 void remove_tail(int i) {
-  if (mesi_cache[i].LRU_head == mesi_cache[i].LRU_tail) {
+  if (mesi_cache[i].LRU_head == mesi_cache[i].LRU_tail) { // if only one node 
     mesi_cache[i].LRU_head = (Pcache_line)NULL; 
     mesi_cache[i].LRU_tail = (Pcache_line)NULL;
   } else {
@@ -246,80 +267,256 @@ int is_address_in_list(int i, int addr){
   return FALSE;
 }
 
-void bus_transaction(int transaction_type){
-  switch (transaction_type) {
-    case BUS_READ_MISS: 
-    
-    break; 
-    
-    case BUS_READ_HIT: 
-    
-    break; 
-    
-    case BUS_WRITE_MISS: 
-
-    break;
-
-    case BUS_WRITE_HIT: 
-
-    break; 
-
+void bus_read_miss(int i, int addr) {
+  Pcache_line node = mesi_cache[i].LRU_head;
+  while (node) {
+    if ((node->state == STATE_EXCLUSIVE) && (node->tag == addr)){
+      // EXCLUSIVE to SHARED
+      node->state = STATE_SHARED;
+    }
+    if ((node->state == STATE_MODIFIED) && (node->tag == addr)){
+      /***** WRITE BACK *****/
+      // increment writeback counter 
+      mesi_cache_stat[i].copies_back += 1;
+      // MODIFIED to SHARED
+      node->state = STATE_SHARED;
+    }
+    node = node->LRU_next;
   }
+}
+
+void bus_write_miss(int i, int addr) {
+  Pcache_line node = mesi_cache[i].LRU_head;
+  while (node) {
+    if ((node->state == STATE_MODIFIED) && (node->tag == addr)){
+      /***** WRITE BACK *****/
+      // increment writeback counter 
+      mesi_cache_stat[i].copies_back += 1;
+      // MODIFIED to SHARED
+      node->state = STATE_INVALID;
+    } else if (node->tag == addr) {
+      // EXCLUSIVE, SHARED, INVALID to INVALID
+      node->state = STATE_INVALID;
+    }
+    node = node->LRU_next;
+  }
+}
+
+void bus_write_hit(int i, int addr) {
+  Pcache_line node = mesi_cache[i].LRU_head;
+  while (node) {
+    if ((node->state == STATE_SHARED) && (node->tag == addr)){
+      // SHARED to INVALID
+      node->state = STATE_INVALID;
+    }
+    node = node->LRU_next;
+  }
+}
+
+void bus_transaction(int transaction_type, int sender, int addr){
+  switch (transaction_type){
+    case BUS_READ_MISS:
+      for (int i = 0; i < num_core; i ++) {
+        if (i != sender) bus_read_miss(i, addr); 
+      }
+    break;
+    case BUS_WRITE_MISS:
+      for (int i = 0; i < num_core; i ++) {
+        if (i != sender) bus_write_miss(i, addr); 
+      }
+    break;
+    case BUS_WRITE_HIT:
+      for (int i = 0; i < num_core; i ++) {
+        if (i != sender) bus_write_hit(i, addr); 
+      }
+    break;
+  }
+}
+/* the function finds where which core the exclusive block is, return -1 if none*/
+int no_exclusive(int sender, int addr) {
+  for(int i = 0; i < num_core; i++){
+    if (i != sender) {
+      Pcache_line node = mesi_cache[i].LRU_head;
+      while(node){
+        if (node->tag == addr && node->state == STATE_EXCLUSIVE){
+          return FALSE;
+        }
+        node = node->LRU_next;
+      }
+    }
+  }
+  return TRUE; 
 }
 
 void perform_access_store(int addr, int i)
 {
-  printf("\naccess store:\n");
-  printf("\taddr: %.8x\n", addr);
-  printf("\ti: %d\n", i);
-}
+  mesi_cache_stat[i].accesses += 1;
+  //print_basic(i, addr);
 
-void perform_access_load(int addr, int i)
-{
-  printf("\naccess load:\n");
-  printf("\taddr: %.8x\n", addr);
-  printf("\tcore: %d\n", i);
+  int num_shift = LOG2(cache_block_size);
+  addr = (addr >> num_shift);
+
+  Pcache_line new_cache_line = (Pcache_line )malloc(sizeof(cache_line));
+  new_cache_line->tag = addr;
+  new_cache_line->state = STATE_MODIFIED;
+
   Pcache_line node = get_node(i, addr);
-  if (node == NULL){    // if block is not in the cache 
-    if (mesi_cache[i].cache_contents >= cache_usize / cache_block_size){ // if cache is full 
+  if (node == NULL) {
+    /******************** WRITE MISS (NOT in cache) ********************/
+    // increment misses counter
+    mesi_cache_stat[i].misses += 1;
+    // increment fetch 
+    mesi_cache_stat[i].demand_fetches += 1;
+    /***** if cache is full, remove the tail, writeback if tail is modified *****/
+    if (mesi_cache[i].cache_contents >= cache_usize / cache_block_size){ 
+      // increment replacement counter
+      mesi_cache_stat[i].replacements += 1;
       // get tail info
       unsigned tail_tag = mesi_cache[i].LRU_tail->tag;
       int tail_state = mesi_cache[i].LRU_tail->state;
       // write back if modified 
       if (tail_state == STATE_MODIFIED){
-        // write back 
-        // bus write back to main mem 
+        /***** WRITE BACK *****/
+        // increment writeback counter 
+        mesi_cache_stat[i].copies_back += 1; 
       }
       // remove tail 
       remove_tail(i);
-    } else { // if cache is not full 
-      // create a new block 
-      Pcache_line new_cache_line = (Pcache_line )malloc(sizeof(cache_line));
-      new_cache_line->tag = addr;
-      new_cache_line->state = STATE_SHARED;
-      // add new block to cache 
-      insert(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, new_cache_line);
-      // increment counter 
-      mesi_cache[i].cache_contents += 1;
-    }
+      mesi_cache[i].cache_contents -= 1;
+    } 
+    // insert new block 
+    insert(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, new_cache_line);
+    // write allocate
+    mesi_cache[i].cache_contents += 1;
     
+    bus_transaction(BUS_WRITE_MISS, i, addr);
+    mesi_cache_stat[i].broadcasts += 1;
 
-  } else {              // if block is in the cache 
-    // get the information of the old block
-    int tag = node->tag;
-    int state = node->state;  
+  } else if (node->state == STATE_INVALID) {
+    /******************** WRITE MISS (INVALID) ********************/
+    // increment misses counter
+    mesi_cache_stat[i].misses += 1;
+    // increment fetch 
+    mesi_cache_stat[i].demand_fetches += 1;
+
+    delete(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, node);
+    insert(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, new_cache_line);
+    bus_transaction(BUS_WRITE_MISS, i, addr);
+    mesi_cache_stat[i].broadcasts += 1;
+  } else if (node->state == STATE_SHARED){
+    /******************** WRITE HIT (SHARED) ********************/
+    delete(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, node);
+    insert(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, new_cache_line);
+    bus_transaction(BUS_WRITE_HIT, i, addr);
+    mesi_cache_stat[i].broadcasts += 1;
+  } else  {
+    /******************** WRITE HIT (EXCLUSIVE, MODIFIED) ********************/
+    delete(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, node);
+    insert(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, new_cache_line);
+  }
+  
+  //print_cache_list(i);
+}
+
+void perform_access_load(int addr, int i)
+{
+  mesi_cache_stat[i].accesses += 1;
+  //print_basic(i, addr);
+  int num_shift = LOG2(cache_block_size);
+  addr = (addr >> num_shift);
+  Pcache_line node = get_node(i, addr);
+
+  /******************** READ MISS (NOT in the cache) ********************/
+  if (node == NULL){    
+
+    // increment misses counter
+    mesi_cache_stat[i].misses += 1;
+    // increment fetch 
+    mesi_cache_stat[i].demand_fetches += 1;
+
+    /***** if cache is full, remove the tail, writeback if tail is modified *****/
+    if (mesi_cache[i].cache_contents >= cache_usize / cache_block_size){ 
+      // increment replacement counter
+      mesi_cache_stat[i].replacements += 1;
+      // get tail info
+      unsigned tail_tag = mesi_cache[i].LRU_tail->tag;
+      int tail_state = mesi_cache[i].LRU_tail->state;
+      // write back if modified 
+      if (tail_state == STATE_MODIFIED){
+        /***** WRITE BACK *****/
+        // increment writeback counter 
+        mesi_cache_stat[i].copies_back += 1; 
+      }
+      // remove tail 
+      remove_tail(i);
+      mesi_cache[i].cache_contents -= 1;
+    }
+
+    /***** insert new block *****/
+    // create a new block 
+    Pcache_line new_cache_line = (Pcache_line )malloc(sizeof(cache_line));
+    new_cache_line->tag = addr;
+    // determine if goes to EXECUTIVE OR SHARED
+    if (no_exclusive(i, addr) == TRUE) {
+      new_cache_line->state = STATE_EXCLUSIVE;
+    } else {
+      new_cache_line->state = STATE_SHARED;
+    }
+    // add new block to cache 
+    insert(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, new_cache_line);
+    // increment counter 
+    mesi_cache[i].cache_contents += 1;
+
+    /***** broadcast READ MISS *****/
+    // send BUS READ MISS 
+    bus_transaction(BUS_READ_MISS, i, addr);
+    // increment broadcasts
+    mesi_cache_stat[i].broadcasts += 1;
+
+  } else if (node->state == STATE_INVALID) {
+    /******************** READ MISS (INVALID) ********************/
+    // increment misses counter
+    mesi_cache_stat[i].misses += 1;
+    // fetching memory
+    mesi_cache_stat[i].demand_fetches += 1;
+
+    /***** replace invalid block *****/ 
+    // remove invalid block
+    delete(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, node);
+    // create a new block  
+    Pcache_line new_cache_line = (Pcache_line )malloc(sizeof(cache_line));
+    new_cache_line->tag = addr;
+    // determine if goes to EXECUTIVE OR SHARED
+    if (no_exclusive(i, addr) == TRUE) {
+      new_cache_line->state = STATE_EXCLUSIVE;
+    } else {
+      new_cache_line->state = STATE_SHARED;
+    }
+    // add new block to cache 
+    insert(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, new_cache_line);
+    // dont need to increment counter 
+
+    /***** broadcast READ MISS *****/
+    // send BUS READ MISS 
+    bus_transaction(BUS_READ_MISS, i, addr);
+    // increment broadcasts
+    mesi_cache_stat[i].broadcasts += 1;
+
+  } else {
+    /********** READ HIT (SHARED, EXCLUSIVE, MODIFIED) **********/
+    /***** replace old block *****/ 
+    // get information of existing block
+    unsigned old_tag = node->tag;       
+    int old_state = node->state;   
     // delete the old block 
     delete(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, node);
     // make a copy of the block 
     Pcache_line new_cache_line = (Pcache_line )malloc(sizeof(cache_line));
-    new_cache_line->tag = tag;
-    new_cache_line->state = state;    // the state is unchanged 
+    new_cache_line->tag = old_tag;
+    new_cache_line->state = old_state;    // the state is unchanged 
     // reinsert the block to make the LRU work 
     insert(&mesi_cache[i].LRU_head, &mesi_cache[i].LRU_tail, new_cache_line);
     // dont need to increment counter 
-    
   } 
-  
-  print_cache_list(i);
-
+  //print_cache_list(i);
 }
