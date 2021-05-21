@@ -283,17 +283,6 @@ Pcache_line get_node(int i, int addr){
   return NULL;
 }
 
-// int is_address_in_list(int i, int addr){
-//   Pcache_line node = mesi_cache[i].LRU_head;
-//   while(node){
-//     if (node->tag == addr){
-//       return TRUE;
-//     }
-//     node = node->LRU_next;
-//   }
-//   return FALSE;
-// }
-
 void bus_read_miss(int i, int addr) {
   Pcache_line node = mesi_cache[i].LRU_head;
   while (node) {
